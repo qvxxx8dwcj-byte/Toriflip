@@ -1,0 +1,122 @@
+name: Tori Flip Bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Scan Tori
+        env:
+          WEBHOOK: ${{ secrets.WEBHOOK }}
+        run: |
+          cat > bot.py << 'PY'
+          import requests, json, os, re
+          from bs4 import BeautifulSoup
+
+          WEBHOOK = os.environ["WEBHOOK"]
+          SEEN_FILE = "seen.json"
+
+          searches = [
+              "ps5", "playstation 5", "switch", "switch oled", "nintendo switch",
+              "iphone", "ipad", "macbook", "airpods", "airpods pro", "airpods max",
+              "apple watch", "rtx", "rtx 3060", "rtx 3070", "rtx 3080", "rtx 4070",
+              "dyson", "dyson v15", "moccamaster", "jbl", "marshall", "sony wh",
+              "steam deck", "gopro", "dji",
+
+              "lego", "lego star wars", "pokemon", "pokemon kortit", "warhammer",
+              "manga", "retro", "ps4", "ps vita", "nintendo ds",
+
+              "nike vintage", "carhartt", "carhartt wip", "patagonia", "arcteryx",
+              "adidas samba", "new balance", "salomon", "stone island"
+          ]
+
+          max_prices = {
+              "ps5": 350, "playstation 5": 350,
+              "switch": 180, "switch oled": 220, "nintendo switch": 180,
+              "iphone": 300, "ipad": 200, "macbook": 500,
+              "airpods": 80, "airpods pro": 100, "airpods max": 250,
+              "apple watch": 100,
+              "rtx": 300, "rtx 3060": 180, "rtx 3070": 250, "rtx 3080": 350, "rtx 4070": 450,
+              "dyson": 180, "dyson v15": 250,
+              "moccamaster": 70, "jbl": 60, "marshall": 100, "sony wh": 120,
+              "steam deck": 300, "gopro": 90, "dji": 250,
+              "lego": 100, "lego star wars": 120,
+              "pokemon": 80, "pokemon kortit": 80,
+              "warhammer": 100, "manga": 50, "retro": 80,
+              "ps4": 80, "ps vita": 100, "nintendo ds": 50,
+              "nike vintage": 60, "carhartt": 70, "carhartt wip": 80,
+              "patagonia": 60, "arcteryx": 100,
+              "adidas samba": 60, "new balance": 60, "salomon": 70,
+              "stone island": 100
+          }
+
+          if os.path.exists(SEEN_FILE):
+              seen = set(json.load(open(SEEN_FILE)))
+          else:
+              seen = set()
+
+          def price_from_text(text):
+              m = re.search(r"(\d{1,4})\s*€", text)
+              return int(m.group(1)) if m else None
+
+          hits = []
+
+          for q in searches:
+              url = "https://www.tori.fi/recommerce/forsale/search?location=1.100001.110240&q=" + requests.utils.quote(q)
+              r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=20)
+              soup = BeautifulSoup(r.text, "html.parser")
+
+              for a in soup.find_all("a", href=True):
+                  href = a["href"]
+                  text = a.get_text(" ", strip=True)
+
+                  if "/item/" not in href:
+                      continue
+
+                  link = href if href.startswith("http") else "https://www.tori.fi" + href
+
+                  if link in seen:
+                      continue
+
+                  price = price_from_text(text)
+                  limit = max_prices.get(q, 100)
+
+                  if price is not None and price <= limit:
+                      hits.append((q, text[:180], price, link))
+                      seen.add(link)
+
+          json.dump(list(seen)[-1000:], open(SEEN_FILE, "w"))
+
+          if hits:
+              msg = "🔥 **UUSIA HYVIÄ TORI FLIPPEJÄ KEMI**\n\n"
+              for q, text, price, link in hits[:10]:
+                  msg += f"**{q.upper()}** — {price}€\n{text}\n{link}\n\n"
+
+              requests.post(WEBHOOK, json={"content": msg[:1900]})
+          else:
+              print("Ei uusia hyviä flippejä.")
+          PY
+
+          python bot.py
+
+      - name: Save seen items
+        run: |
+          git config user.name "tori-bot"
+          git config user.email "bot@example.com"
+          git add seen.json || true
+          git commit -m "update seen items" || true
+          git push || true
